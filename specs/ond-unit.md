@@ -22,6 +22,10 @@ ond-unit は利用者が記述した通常の Ond プログラムを通常の On
 実行対象のケース集合は §11 の `cases` で定める。\
 登録順に 0 から始まる `u32` の index を各ケースに割り当て、ホストは登録済みの有効な index を選択する。
 
+`project.path` の対象は、`ond.toml` の `[project].final` が省略または `false` である通常 Ond project とする。\
+`final = true` の対象は、ケース関数の配置先が root package または subpackage のいずれであっても、生成専用プロジェクトを更新する前に ERROR とする。\
+final の型と省略値、および依存 graph の成立条件は [Ond project role 仕様](https://github.com/SUPER-SHRINE/ond/blob/2b532ebef205d65d19024d5352c876293b090129/specs/ond/build/roles.md) に従う。
+
 ケース関数の型は引数なし、戻り値なしの公開トップレベル関数 `func()` とする。\
 通常の import が可能な任意の package に配置でき、補助関数には通常の可視性規則を適用する。\
 同一 package 内の非公開補助関数も使用できる。\
@@ -34,18 +38,26 @@ ond-unit は登録順と登録配置情報から、ケースの import 宣言、
 ホストと生成ソースは同一のケース一覧および配置情報を使用する。
 
 生成ソースは利用者ソースを編集せず、`project.path` の project 内の `target/ond-unit/` に生成専用プロジェクトとして置く。\
+生成専用プロジェクトは `[project].final = true` とし、対象 project を直接の path 依存として登録する。\
+`project.role` を指定した場合はその依存 edge の `role` に同じ値を設定し、省略時は edge の `role` も省略して対象の role 未指定構成を選択する。\
+この選択を実行設定の全ケースと対象 project の全 package に適用する。\
+対象の宣言済み role との一致、依存先への選択と project 境界、および複数依存経路の整合は上記の Ond project role 仕様に従い、違反は VM 実行前に ERROR とする。\
+source の選択と可視性は [Ond role 構文と可視性](https://github.com/SUPER-SHRINE/ond/blob/2b532ebef205d65d19024d5352c876293b090129/specs/ond/language/v1/roles.md) に従う。\
+生成 `main()` は生成専用プロジェクトの通常 role 文脈に置き、選択された対象の公開 API を通常の project 間参照として利用する。
+
 各実行時に現在の設定と登録先に合わせて生成専用プロジェクトを更新し、保存する。\
 通常の compile cache は、入力が一致する場合に利用できる。
 
 ## 4. コンパイル成果物と外部規範
 
 実行するプログラムは通常の Ond compile と link が生成する ONDX を使用する。\
-ONDX の形式、版識別、ロードおよび配置契約は [Ond artifacts 仕様](https://github.com/SUPER-SHRINE/ond/blob/e7b1846082050f988a41cbe8d73573bbbdafcae9/specs/ond/artifacts.md) に従う。
+compile 成果物の Contract は [Ond artifacts 仕様の版識別と互換条件](https://github.com/SUPER-SHRINE/ond/blob/2b532ebef205d65d19024d5352c876293b090129/specs/ond/artifacts.md#版識別と互換条件) に従う。\
+ONDX の形式、版識別、ロードおよび配置契約は [Ond artifacts 仕様](https://github.com/SUPER-SHRINE/ond/blob/2b532ebef205d65d19024d5352c876293b090129/specs/ond/artifacts.md) に従う。
 
 実行対象は Ond target `kagura-v1` とし、ABI は `ond-kagura-v1` とする。\
-CPU と bus は [Kagura target README](https://github.com/SUPER-SHRINE/ond/blob/e7b1846082050f988a41cbe8d73573bbbdafcae9/specs/ond/targets/kagura-v1/README.md) が参照する Kagura 規範仕様 1.0.0 に従う。\
-ABI 契約は [ond-kagura-v1 ABI 仕様](https://github.com/SUPER-SHRINE/ond/blob/e7b1846082050f988a41cbe8d73573bbbdafcae9/specs/ond/targets/kagura-v1/abi.md) に従う。\
-fault の意味分類とメモリ契約は [Kagura machine 仕様](https://github.com/SUPER-SHRINE/ond/blob/e7b1846082050f988a41cbe8d73573bbbdafcae9/specs/ond/targets/kagura-v1/machine.md) に従う。\
+CPU と bus は [Kagura target README](https://github.com/SUPER-SHRINE/ond/blob/2b532ebef205d65d19024d5352c876293b090129/specs/ond/targets/kagura-v1/README.md) が参照する Kagura 規範仕様 1.0.0 に従う。\
+ABI 契約は [ond-kagura-v1 ABI 仕様](https://github.com/SUPER-SHRINE/ond/blob/2b532ebef205d65d19024d5352c876293b090129/specs/ond/targets/kagura-v1/abi.md) に従う。\
+fault の意味分類とメモリ契約は [Kagura machine 仕様](https://github.com/SUPER-SHRINE/ond/blob/2b532ebef205d65d19024d5352c876293b090129/specs/ond/targets/kagura-v1/machine.md) に従う。\
 debug metadata の形式と lookup は §9 の外部規範を定義元とする。
 
 ## 5. VM メモリと起動
@@ -169,7 +181,7 @@ Ond の意味分類は §11.3 の `ond_kind` の値を対象とし、§4 の tar
 利用者コードが発生させる trap も通常の fault として照合し、fault コードは本来の CPU fault コードのままとする。
 
 debug metadata v1 は全ケースで生成および読み込みを行い、対象イメージとの識別子照合を必須とする。\
-その形式と lookup の契約は [Debug metadata v1 仕様](https://github.com/SUPER-SHRINE/ond/blob/e7b1846082050f988a41cbe8d73573bbbdafcae9/specs/ond/debug-metadata/v1.md) に従う。\
+その形式と lookup の契約は [Debug metadata v1 仕様](https://github.com/SUPER-SHRINE/ond/blob/2b532ebef205d65d19024d5352c876293b090129/specs/ond/debug-metadata/v1.md) に従う。\
 sidecar の欠落、不適合、またはイメージ識別子の不一致は ERROR とする。\
 指定された条件の照合に必要な FunctionDebug、DebugRange、または source の情報を得られない場合も ERROR とし、使用しない任意情報の欠落はこの ERROR の条件に含めない。\
 CPU fault result が指定の address、width、operation を持たない場合、および `message` が `null` で `reason` と一致しない場合は、対応条件の不一致とする。
@@ -205,7 +217,8 @@ key は lower_snake_case とし、未知 key、型不正、必須項目の欠落
 | root | `vm` | table | 必須 |
 | root | `mmio` | table の配列 | 省略時は空列 |
 | root | `cases` | table の配列、index が §3 の型に収まる件数 | 必須 |
-| `project` | `path` | 非空 string、通常 Ond project の directory path | 必須 |
+| `project` | `path` | 非空 string、§3 の対象条件を満たす Ond project の directory path | 必須 |
+| `project` | `role` | 非空 string、§3 の選択 role | 省略時の構成は §3 |
 | `vm` | `ram_size` | integer、物理 RAM の byte 容量、§5 の配置条件を満たす `8 < N <= 2^32`、8 の倍数 | 必須、既定値なし |
 | `vm` | `stack_size` | integer、通常 link 対象 RAM の stack 予約 byte 数、§4 の配置契約に適合 | 必須、既定値なし |
 | `mmio` の各要素 | `name` | 非空 string、共通 device の一意な名前 | 必須 |
