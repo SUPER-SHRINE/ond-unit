@@ -1,0 +1,27 @@
+package cases
+
+func helper() {}
+func Pass() { helper() }
+func Fault() { trap "expected" }
+func Loop() { for {} }
+func Read() {
+    var port = 0x10000000 as *u32
+    var value = *port
+    if value != 7 { trap "read" }
+}
+func Write() {
+    var port = 0x10000000 as *u32
+    *port = 9
+}
+func SecondIndex() {
+    var input = 65528 as *u32
+    if *input != 1 { trap "index" }
+}
+func WrongSignature(value: u32) {}
+func Ram() {
+    var data = 0x8000 as *u32
+    if *data != 0x12345678 { trap "byte-order" }
+    *data = 0x90abcdef
+}
+var Callback: func()
+type FunctionType func()
