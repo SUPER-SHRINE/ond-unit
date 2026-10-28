@@ -349,3 +349,60 @@ fn generated_project_back_edge_returns_compiler_error() {
         Some("ond_unit_generated")
     );
 }
+
+#[test]
+#[ignore = "通常のond executableをPATHへ配置して実行する"]
+fn case_files_share_environment_and_keep_filtered_indices() {
+    let f = Fixture::new();
+    let root = "version=1\ncase_files=['parts/indices.toml','parts/observations.toml']\n[project]\npath='checks'\n[vm]\nram_size=65536\nstack_size=4096\n[[mmio]]\nname='port'\nbase=0x10000000\nsize=4\n".to_owned() + &case("inline", "Pass");
+    fs::create_dir_all(f.root.join("parts")).unwrap();
+    let indices = "package='checks/cases'\n[[cases]]\nname='second'\nfunction='SecondIndex'\n";
+    fs::write(f.root.join("parts/indices.toml"), indices).unwrap();
+    // Child records use exactly the inline case observations and opaque debug strings.
+    let observations = "package='checks/cases'\n".to_owned()
+        + &case("fault", "Fault").replace("package='checks/cases'\n", "")
+        + "expect_fault={ond_kind='ExplicitTrap',source={path='checks/cases/api.ond',line=5}}\n"
+        + &case("read", "Read").replace("package='checks/cases'\n", "")
+        + "[[cases.mmio]]\ndevice='port'\nread_responses=[{width=4,value=7}]\n"
+        + &case("ram", "Ram").replace("package='checks/cases'\n", "")
+        + "ram_initial=[{address=0x8000,bytes=[0x78,0x56,0x34,0x12]}]\nram_expected=[{address=0x8000,bytes=[0xef,0xcd,0xab,0x90]}]\n";
+    fs::write(f.root.join("parts/observations.toml"), &observations).unwrap();
+    fs::write(f.root.join("ond-unit.toml"), root).unwrap();
+    // Run outside the config directory; project.path and child paths have different bases.
+    let config_path = f.root.join("ond-unit.toml");
+    let output = Command::new(env!("CARGO_BIN_EXE_ond-unit"))
+        .current_dir(f.root.join("checks"))
+        .arg(&config_path)
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains("PASS=5 FAIL=0 STEP_LIMIT=0 ERROR=0"),
+        "{text}"
+    );
+    assert!(text.find("inline: PASS").unwrap() < text.find("second: PASS").unwrap());
+    assert!(text.find("second: PASS").unwrap() < text.find("fault: PASS").unwrap());
+    assert!(f.run(&["--case", "second"], 0).contains("second: PASS"));
+    let generated = f.root.join("checks/target/ond-unit/main.ond");
+    let before = fs::read(&generated).unwrap();
+    for child in [
+        observations.clone() + "\n[[cases]]\nname='invalid'\nfunction='Pass'\nmax_steps=0\n",
+        observations.clone() + "\n[[cases]]\nname='wrong-type'\nfunction='WrongSignature'\n",
+    ] {
+        fs::write(f.root.join("parts/observations.toml"), &child).unwrap();
+        let text = f.run(&["--case", "second"], 2);
+        assert!(!text.contains("steps="), "{text}");
+        if child.contains("max_steps=0") {
+            assert_eq!(fs::read(&generated).unwrap(), before);
+        } else {
+            assert!(text.contains("ondビルド失敗"), "{text}");
+        }
+    }
+    fs::remove_file(f.root.join("parts/observations.toml")).unwrap();
+    assert!(!f.run(&["--case", "second"], 2).contains("steps="));
+}

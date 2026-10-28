@@ -200,14 +200,14 @@ pub fn source(config: &Config) -> String {
     }
     let count = config.cases.len();
     text.push_str(&format!(
-        "\nfunc main() {{\n    var callbacks: [{count}]func() = [{count}]func(){{"
+        "\nfunc main() {{\n    var callbacks: [{count}]func() = [{count}]func(){{\n"
     ));
     for case in &config.cases {
         let i = packages.iter().position(|p| *p == case.package).unwrap();
-        text.push_str(&format!("p{i}.{},", case.function));
+        text.push_str(&format!("        p{i}.{},\n", case.function));
     }
     text.push_str(&format!(
-        "}}\n    var selected: u32 = *({} as *u32)\n    callbacks[selected]()\n}}\n",
+        "    }}\n    var selected: u32 = *({} as *u32)\n    callbacks[selected]()\n}}\n",
         config.vm.ram_size - 8
     ));
     text
@@ -405,7 +405,7 @@ mod tests {
             "[project]\nname='ond_unit_generated_'\n[dependencies]\nparent={path='..'}\n",
         )
         .unwrap();
-        let config:Config=toml::from_str("version=1\n[project]\npath='.'\n[vm]\nram_size=1024\nstack_size=128\n[[cases]]\nname='case'\npackage='ond_unit_generated__/cases'\nfunction='Run'\n").unwrap();
+        let config:Config=Config::parse("version=1\n[project]\npath='.'\n[vm]\nram_size=1024\nstack_size=128\n[[cases]]\nname='case'\npackage='ond_unit_generated__/cases'\nfunction='Run'\n", Path::new("ond-unit.toml")).unwrap();
         assert_eq!(
             generated_name(
                 &namespace_names(&root, &root.join("target/ond-unit"), &config).unwrap()
@@ -418,7 +418,7 @@ mod tests {
         let project = root("discovery");
         fs::write(project.join("ond.toml"), "[project]\nname='checks'\n").unwrap();
         let directory = prepare_directory(&project).unwrap();
-        let config: Config = toml::from_str("version=1\n[project]\npath='.'\n[vm]\nram_size=1024\nstack_size=128\n[[cases]]\nname='case'\npackage='checks/cases'\nfunction='Run'\n").unwrap();
+        let config: Config = Config::parse("version=1\n[project]\npath='.'\n[vm]\nram_size=1024\nstack_size=128\n[[cases]]\nname='case'\npackage='checks/cases'\nfunction='Run'\n", Path::new("ond-unit.toml")).unwrap();
         let mut attempted = Vec::new();
         compile_with_names(&project, &directory, &config, |name| {
             attempted.push(name.to_owned());
@@ -503,7 +503,7 @@ mod tests {
                 "[project]\nname='previous_generated'\nfinal=true\n",
             )
             .unwrap();
-            let config: Config = toml::from_str("version=1\n[project]\npath='.'\n[vm]\nram_size=1024\nstack_size=128\n[[cases]]\nname='case'\npackage='checks/cases'\nfunction='Run'\n").unwrap();
+            let config: Config = Config::parse("version=1\n[project]\npath='.'\n[vm]\nram_size=1024\nstack_size=128\n[[cases]]\nname='case'\npackage='checks/cases'\nfunction='Run'\n", Path::new("ond-unit.toml")).unwrap();
             let mut calls = 0;
             let error = compile_with_names(&project, &directory, &config, |name| {
                 calls += 1;
@@ -528,7 +528,7 @@ mod tests {
         let outside = root("outside");
         fs::write(project.join("ond.toml"), "[project]\nname='checks'\n").unwrap();
         let directory = prepare_directory(&project).unwrap();
-        let config: Config = toml::from_str("version=1\n[project]\npath='.'\n[vm]\nram_size=1024\nstack_size=128\n[[cases]]\nname='case'\npackage='checks/cases'\nfunction='Run'\n").unwrap();
+        let config: Config = Config::parse("version=1\n[project]\npath='.'\n[vm]\nram_size=1024\nstack_size=128\n[[cases]]\nname='case'\npackage='checks/cases'\nfunction='Run'\n", Path::new("ond-unit.toml")).unwrap();
         for name in [
             "ond.toml",
             "main.ond",
@@ -589,7 +589,7 @@ mod tests {
     fn registered_cases_require_function_declarations_in_normal_exports() {
         let project = root("exports");
         fs::create_dir(project.join("packages")).unwrap();
-        let config:Config=toml::from_str("version=1\n[project]\npath='.'\n[vm]\nram_size=1024\nstack_size=128\n[[cases]]\nname='decl'\npackage='checks/cases'\nfunction='Run'\n").unwrap();
+        let config:Config=Config::parse("version=1\n[project]\npath='.'\n[vm]\nram_size=1024\nstack_size=128\n[[cases]]\nname='decl'\npackage='checks/cases'\nfunction='Run'\n", Path::new("ond-unit.toml")).unwrap();
         let contract = ond_protocol::Contract::default();
         let signature = serde_json::json!({"parameters":[],"returns":[]});
         let mut artifact = serde_json::json!({

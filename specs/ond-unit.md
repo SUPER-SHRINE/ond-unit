@@ -11,7 +11,7 @@ ond-unit は利用者が記述した通常の Ond プログラムを通常の On
 
 ## 2. 用語
 
-**実行設定** は `ond-unit.toml` に記述する一つの実行環境とケース一覧を指す。
+**実行設定** は root の `ond-unit.toml` と §11.6 の子ファイルで構成する一つの実行環境とケース一覧を指す。
 
 **ケース** は実行設定に登録する一つの実行単位を指す。
 
@@ -19,8 +19,11 @@ ond-unit は利用者が記述した通常の Ond プログラムを通常の On
 
 ## 3. ケース登録と関数
 
-実行対象のケース集合は §11 の `cases` で定める。\
-登録順に 0 から始まる `u32` の index を各ケースに割り当て、ホストは登録済みの有効な index を選択する。
+実行対象のケース集合は、§11.1 の root `cases` と `case_files` に登録された §11.6 の子ファイルの `cases` からなる。\
+登録順は root `cases` の配列順を先頭とし、その後に `case_files` の配列順で各子ファイルの `cases` を配列順に連結した順とする。\
+全ケースの index が `u32` に収まる件数とし、登録順に 0 から始まる index を各ケースに割り当てる。\
+ホストは登録済みの有効な index を選択し、CLI の選択によって登録順と index を変更しない。\
+ケース名は全登録ケースを通じて一意な文字列として照合し、package 名による補完を行わない。
 
 `project.path` の対象は、`ond.toml` の `[project].final` が省略または `false` である通常 Ond project とする。\
 `final = true` の対象は、ケース関数の配置先が root package または subpackage のいずれであっても、生成専用プロジェクトを更新する前に ERROR とする。\
@@ -203,10 +206,11 @@ STEP_LIMIT は PASS、FAIL、および ERROR と別の状態であり、診断�
 
 ## 11. 実行設定の schema
 
-実行設定は root の `version`、`project`、`vm`、`mmio`、`cases` と、以下の表に定める field からなる閉じた schema とする。\
+実行設定の各ファイルは、以下の表に定める field からなる閉じた schema とする。\
 key は lower_snake_case とし、未知 key、型不正、必須項目の欠落、および各表の成立条件に反する値は設定 ERROR である。\
 表中の integer は TOML 整数を指し、範囲の計算は数学的整数で行う。\
-`project.path` の相対 path は設定ファイル所在 directory を基準に解決する。
+`project.path` の相対 path は root 設定ファイル所在 directory を基準に解決する。\
+CLI のケース選択にかかわらず、全ファイルと全登録ケースを検証し、設定 ERROR は VM 実行前に報告する。
 
 ### 11.1. Root と共通環境
 
@@ -216,7 +220,8 @@ key は lower_snake_case とし、未知 key、型不正、必須項目の欠落
 | root | `project` | table | 必須 |
 | root | `vm` | table | 必須 |
 | root | `mmio` | table の配列 | 省略時は空列 |
-| root | `cases` | table の配列、index が §3 の型に収まる件数 | 必須 |
+| root | `cases` | §11.2 の table の配列、空列も可 | `case_files` と少なくとも一方を明示、省略時は空列 |
+| root | `case_files` | §11.6 の子ファイル path を表す非空 string の配列、空列も可 | `cases` と少なくとも一方を明示、省略時は空列 |
 | `project` | `path` | 非空 string、§3 の対象条件を満たす Ond project の directory path | 必須 |
 | `project` | `role` | 非空 string、§3 の選択 role | 省略時の構成は §3 |
 | `vm` | `ram_size` | integer、物理 RAM の byte 容量、§5 の配置条件を満たす `8 < N <= 2^32`、8 の倍数 | 必須、既定値なし |
@@ -230,10 +235,12 @@ key は lower_snake_case とし、未知 key、型不正、必須項目の欠落
 
 ### 11.2. ケース
 
+次表とその参照先を root および子ファイルの各ケースに共通して適用する。
+
 | `cases` の Key | 型・値 | 必須・省略時の動作 |
 | --- | --- | --- |
-| `name` | 非空 string、実行設定内で一意なケース名 | 必須 |
-| `package` | 非空 string、通常 Ond の import 先 package path | 必須 |
+| `name` | 非空 string、§3 のケース名 | 必須 |
+| `package` | 非空 string、通常 Ond の import 先 package path | root のケースでは必須、子ファイルでの指定は §11.6 |
 | `function` | 非空 string、当該 package の通常 Ond の関数名 identifier | 必須、関数の条件は §3 |
 | `max_steps` | 正の integer | 省略時は §10 の既定上限 |
 | `expect_fault` | §11.3 の table | 省略時の終了期待は §8 |
@@ -294,7 +301,24 @@ key は lower_snake_case とし、未知 key、型不正、必須項目の欠落
 | `width` | integer、byte 単位の `1`、`2`、`4` | 必須 |
 | `value` | integer、`0 <= value < 2^(8 * width)` | 必須 |
 
-### 11.6. 設定例
+### 11.6. 子ファイル
+
+`case_files` の各要素は一つの子ファイルを指定する literal な filesystem path とする。\
+相対 path は root 設定ファイル所在 directory を基準に解決し、絶対 path はそのまま使用する。\
+子ファイルの読出しはビルド開始前に行う。\
+読出し先が存在しない、読出しに失敗する、または内容が本節の schema に適合しない場合は設定 ERROR とする。
+
+| 子ファイルの root Key | 型・値 | 必須・省略時の動作 |
+| --- | --- | --- |
+| `package` | §11.2 の `package` と同じ型・値、その子ファイルの全ケースの import 先 | 必須 |
+| `cases` | §11.2 の `package` 以外の field からなる table の配列、空列も可 | 必須 |
+
+子ファイルの各ケースの package は、その子ファイルの root `package` の値とする。\
+各ケースに `package` key を指定した場合は、その値にかかわらず設定 ERROR となる。\
+実行環境と共通 device は §11.1 の root で定義し、子ファイルの各ケースは §11.2 の観測と期待を設定する。\
+source 識別子は、子ファイル内でも §9 の照合規則に従う。
+
+### 11.7. 設定例
 
 以下は schema に従う設定であり、package、関数、および source 識別子は対象 project の値を指定する。\
 例の RAM 領域は、対象 project の配置が §1 と §11.4 の成立条件を満たす場合に適用する。
@@ -361,7 +385,7 @@ ond-unit [CONFIG] [--case NAME]... [--fail-fast]
 `CONFIG` は実行設定ファイルの path であり、省略時はカレント directory の `ond-unit.toml` を使用する。\
 `--case NAME` があれば、その名前で選択された登録ケースの集合を実行し、省略時は全ケースを対象にする。\
 存在しないケース名の指定は VM 実行前に ERROR とする。\
-選択にかかわらず実行順は TOML の登録順とし、§3 の index を維持する。
+実行順と index は §3 に従う。
 
 CLI はケース名、失敗理由、および集計を人向けに出力する。\
 既定では FAIL または STEP_LIMIT の後も後続ケースを実行し、`--fail-fast` 指定時はそのケースの後で実行を終了する。\

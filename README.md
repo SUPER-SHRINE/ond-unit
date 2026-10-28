@@ -21,9 +21,29 @@ cargo run --offline -- path/to/ond-unit.toml --case example --fail-fast
 対象の追加 role を選択するときは、設定の `[project]` に `role` を記述します。
 
 ```toml
+# ond-unit.toml
+version = 1
+case_files = ["cases/ond-unit.toml"]
+
 [project]
 path = "path/to/checks"
 role = "Test"
+
+[vm]
+ram_size = 0x0001_0000
+stack_size = 0x0000_1000
+```
+
+package ごとのケースを別ファイルにまとめる例です。\
+root と子ファイルの設定項目は[規範仕様 §11](specs/ond-unit.md#11-実行設定の-schema)を参照してください。
+
+```toml
+# cases/ond-unit.toml
+package = "checks/cases"
+
+[[cases]]
+name = "example"
+function = "Run"
 ```
 
 ## 開発時の検証

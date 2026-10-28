@@ -29,15 +29,11 @@ package = "checks/cases"
 function = "Run"
 "#;
 fn config(text: &str) -> Config {
-    let c: Config = toml::from_str(text).unwrap();
-    c.validate().unwrap();
-    c
+    Config::parse(text, std::path::Path::new("ond-unit.toml")).unwrap()
 }
 fn rejects(text: &str) {
     assert!(
-        toml::from_str::<Config>(text)
-            .and_then(|c| c.validate().map_err(serde::de::Error::custom))
-            .is_err(),
+        Config::parse(text, std::path::Path::new("ond-unit.toml")).is_err(),
         "accepted {text}"
     );
 }
@@ -114,6 +110,194 @@ fn config_closed_schema_and_required_fields() {
         "{BASIC}\n[[cases]]\nname='first'\npackage='p'\nfunction='F'"
     ));
     rejects(&BASIC.replace("version = 1", "version = 1\nversion=1"));
+}
+struct ConfigFiles {
+    root: std::path::PathBuf,
+}
+impl ConfigFiles {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "config-tests-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+        std::fs::create_dir_all(root.join("parts")).unwrap();
+        Self { root }
+    }
+    fn read(&self, root_fields: &str, cases: &str) -> Result<Config, String> {
+        let text = format!(
+            "version=1\n{root_fields}\n[project]\npath='different-project'\n[vm]\nram_size=1024\nstack_size=128\n{cases}"
+        );
+        let path = self.root.join("ond-unit.toml");
+        std::fs::write(&path, text).unwrap();
+        Config::read(&path)
+    }
+    fn child(&self, name: &str, text: &str) {
+        std::fs::write(self.root.join(name), text).unwrap();
+    }
+}
+#[test]
+fn case_sources_must_be_explicit_and_can_be_empty() {
+    let f = ConfigFiles::new();
+    for fields in ["cases=[]", "case_files=[]", "cases=[]\ncase_files=[]"] {
+        assert!(f.read(fields, "").unwrap().cases.is_empty());
+    }
+    for fields in [
+        "",
+        "cases='bad'",
+        "case_files='bad'",
+        "case_files=[1]",
+        "case_files=['']",
+    ] {
+        assert!(f.read(fields, "").is_err(), "accepted {fields}");
+    }
+}
+#[test]
+fn case_files_assign_packages_and_preserve_registration_order() {
+    let f = ConfigFiles::new();
+    f.child("parts/second.toml", "package='checks/second'\n[[cases]]\nname='second'\nfunction='Run'\n[[cases]]\nname='third'\nfunction='Other'");
+    f.child(
+        "first.toml",
+        "package='checks/first'\n[[cases]]\nname='last'\nfunction='Run'",
+    );
+    let c = f
+        .read(
+            "case_files=['parts/second.toml','first.toml']",
+            &BASIC[BASIC.find("[[cases]]").unwrap()..],
+        )
+        .unwrap();
+    assert_eq!(
+        c.cases
+            .iter()
+            .map(|c| (c.name.as_str(), c.package.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("first", "checks/cases"),
+            ("second", "checks/second"),
+            ("third", "checks/second"),
+            ("last", "checks/first")
+        ]
+    );
+    // Absolute file paths use the same root environment.
+    let file = f.root.join("first.toml").display().to_string();
+    assert_eq!(
+        f.read(&format!("case_files=['{file}']"), "").unwrap().cases[0].name,
+        "last"
+    );
+}
+#[test]
+fn child_files_have_a_closed_schema_and_require_package_and_cases() {
+    let f = ConfigFiles::new();
+    for child in [
+        "",
+        "package='p'",
+        "cases=[]",
+        "package=''\ncases=[]",
+        "package=1\ncases=[]",
+        "package='p'\ncases='bad'",
+        "package='p'\ncases=[1]",
+        "package='p'\ncases=[]\nversion=1",
+        "package='p'\ncases=[]\nproject={path='.'}",
+        "package='p'\ncases=[]\nvm={ram_size=1024,stack_size=128}",
+        "package='p'\ncases=[]\nmmio=[]",
+        "package='p'\ncases=[]\ncase_files=[]",
+        "package='p'\ncases=[]\nextra=1",
+        "package='p'\ncases=[",
+    ] {
+        f.child("parts/cases.toml", child);
+        let error = f.read("case_files=['parts/cases.toml']", "").unwrap_err();
+        assert!(
+            error.contains("parts") && error.contains("cases.toml"),
+            "{error}"
+        );
+    }
+    f.child("parts/cases.toml", "package='p'\ncases=[]");
+    assert!(
+        f.read("case_files=['parts/cases.toml']", "")
+            .unwrap()
+            .cases
+            .is_empty()
+    );
+    for fields in [
+        "package='p'",
+        "package=''",
+        "unknown=1",
+        "max_steps=0",
+        "function=1",
+    ] {
+        let case = if fields.starts_with("function=") {
+            "name='child'"
+        } else {
+            "name='child'\nfunction='Run'"
+        };
+        f.child(
+            "parts/cases.toml",
+            &format!("package='p'\n[[cases]]\n{case}\n{fields}"),
+        );
+        assert!(
+            f.read("case_files=['parts/cases.toml']", "").is_err(),
+            "accepted {fields}"
+        );
+    }
+    f.child("parts/cases.toml", "package='p'\n[[cases]]\nfunction='Run'");
+    assert!(f.read("case_files=['parts/cases.toml']", "").is_err());
+}
+#[test]
+fn missing_unreadable_files_and_global_duplicate_names_are_errors() {
+    let f = ConfigFiles::new();
+    for file in ["missing.toml", "parts"] {
+        let error = f.read(&format!("case_files=['{file}']"), "").unwrap_err();
+        assert!(error.contains(file), "{error}");
+    }
+    f.child(
+        "one.toml",
+        "package='p'\n[[cases]]\nname='first'\nfunction='Run'",
+    );
+    f.child(
+        "two.toml",
+        "package='q'\n[[cases]]\nname='first'\nfunction='Other'",
+    );
+    let inline = &BASIC[BASIC.find("[[cases]]").unwrap()..];
+    assert!(
+        f.read("case_files=['one.toml']", inline)
+            .unwrap_err()
+            .contains("case名重複")
+    );
+    assert!(
+        f.read("case_files=['one.toml','two.toml']", "")
+            .unwrap_err()
+            .contains("case名重複")
+    );
+}
+#[test]
+fn child_cases_use_root_devices_and_preserve_ram_and_opaque_fault_paths() {
+    let f = ConfigFiles::new();
+    f.child("parts/cases.toml", "package='p'\n[[cases]]\nname='child'\nfunction='Run'\nram_initial=[{address=20,bytes=[1,2]}]\nram_expected=[{address=30,bytes=[3]}]\nexpect_fault={ond_kind='ExplicitTrap',source={path='opaque/../case.ond',line=7}}\n[[cases.mmio]]\ndevice='port'\nread_responses=[{width=4,value=7}]\nexpected_accesses=[]");
+    let devices = "[[mmio]]\nname='port'\nbase=4096\nsize=4";
+    let c = f.read("case_files=['parts/cases.toml']", devices).unwrap();
+    let case = &c.cases[0];
+    assert_eq!(case.ram_initial[0].bytes, [1, 2]);
+    assert_eq!(case.ram_expected[0].address, 30);
+    assert_eq!(
+        case.expect_fault
+            .as_ref()
+            .unwrap()
+            .source
+            .as_ref()
+            .unwrap()
+            .path,
+        "opaque/../case.ond"
+    );
+    let mut bus = TestBus::new(&c, case).unwrap();
+    assert_eq!(bus.read32(4096).unwrap(), 7);
+    assert!(
+        f.read("case_files=['parts/cases.toml']", "")
+            .unwrap_err()
+            .contains("未登録device")
+    );
 }
 #[test]
 fn project_role_is_optional_and_requires_a_nonempty_string() {
@@ -515,6 +699,6 @@ fn generated_imports_are_unique_and_include_all_registered_functions() {
     ));
     let text = crate::build::source(&c);
     assert_eq!(text.matches("import ").count(), 1);
-    assert!(text.contains("p0.Run,p0.Other,"));
+    assert!(text.contains("        p0.Run,\n        p0.Other,\n"));
     assert!(text.contains("var selected: u32 = *(1016 as *u32)"));
 }

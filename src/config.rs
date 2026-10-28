@@ -2,15 +2,30 @@ use serde::Deserialize;
 use std::{collections::HashSet, path::Path};
 
 pub const SPACE: u64 = 1 << 32;
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug)]
 pub struct Config {
     pub version: u32,
     pub project: Project,
     pub vm: Vm,
-    #[serde(default)]
     pub mmio: Vec<Device>,
     pub cases: Vec<Case>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RootConfig {
+    version: u32,
+    project: Project,
+    vm: Vm,
+    #[serde(default)]
+    mmio: Vec<Device>,
+    cases: Option<Vec<Case>>,
+    case_files: Option<Vec<String>>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaseFile {
+    package: String,
+    cases: Vec<toml::Table>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -166,8 +181,58 @@ impl Config {
     pub fn read(path: &Path) -> Result<Self, String> {
         let text =
             std::fs::read_to_string(path).map_err(|e| format!("設定 {}: {e}", path.display()))?;
-        let config: Self = toml::from_str(&text).map_err(|e| format!("設定: {e}"))?;
-        config.validate()?;
+        Self::parse(&text, path)
+    }
+    pub fn parse(text: &str, path: &Path) -> Result<Self, String> {
+        let root: RootConfig =
+            toml::from_str(text).map_err(|e| format!("設定 {}: {e}", path.display()))?;
+        if root.cases.is_none() && root.case_files.is_none() {
+            return Err(format!(
+                "設定 {}: cases または case_files が必要です",
+                path.display()
+            ));
+        }
+        let mut cases = root.cases.unwrap_or_default();
+        for file in root.case_files.unwrap_or_default() {
+            nonempty(&file, "case_files path")
+                .map_err(|e| format!("設定 {}: {e}", path.display()))?;
+            let child_path = path.parent().unwrap_or(Path::new(".")).join(file);
+            let load = || -> Result<Vec<Case>, String> {
+                let text = std::fs::read_to_string(&child_path).map_err(|e| e.to_string())?;
+                let child: CaseFile = toml::from_str(&text).map_err(|e| e.to_string())?;
+                nonempty(&child.package, "package")?;
+                child
+                    .cases
+                    .into_iter()
+                    .map(|mut case| {
+                        if case.contains_key("package") {
+                            return Err("子ファイルの cases に package は指定できません".into());
+                        }
+                        case.insert("package".into(), toml::Value::String(child.package.clone()));
+                        toml::Value::Table(case)
+                            .try_into()
+                            .map_err(|e: toml::de::Error| e.to_string())
+                    })
+                    .collect()
+            };
+            cases.extend(load().map_err(|e| {
+                format!(
+                    "設定 {} の case_files {}: {e}",
+                    path.display(),
+                    child_path.display()
+                )
+            })?);
+        }
+        let config = Self {
+            version: root.version,
+            project: root.project,
+            vm: root.vm,
+            mmio: root.mmio,
+            cases,
+        };
+        config
+            .validate()
+            .map_err(|e| format!("設定 {}: {e}", path.display()))?;
         Ok(config)
     }
     pub fn validate(&self) -> Result<(), String> {
